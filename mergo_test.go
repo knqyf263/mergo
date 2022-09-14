@@ -668,6 +668,25 @@ func TestMap(t *testing.T) {
 	}
 }
 
+type deepSliceTest struct {
+	S []simpleTest
+}
+
+func TestMapWithDeepSliceCopy(t *testing.T) {
+	a := deepSliceTest{S: []simpleTest{{Value: 1}}}
+	b := map[string]interface{}{
+		"S": []map[string]interface{}{
+			{"Value": 42},
+		},
+	}
+	if err := mergo.Map(&a, b, mergo.WithSliceDeepCopy); err != nil {
+		t.FailNow()
+	}
+	if !reflect.DeepEqual(deepSliceTest{S: []simpleTest{{Value: 42}}}, a) {
+		t.Errorf("b not merged in properly: a.S(%v) != b.S(%v)", a.S, b["S"])
+	}
+}
+
 func TestSimpleMap(t *testing.T) {
 	a := simpleTest{}
 	b := map[string]interface{}{

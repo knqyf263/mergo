@@ -33,6 +33,9 @@ func isExported(field reflect.StructField) bool {
 // short circuiting on recursive types.
 func deepMap(dst, src reflect.Value, visited map[uintptr]*visit, depth int, config *Config) (err error) {
 	overwrite := config.Overwrite
+	overwriteWithEmptySrc := config.overwriteWithEmptyValue
+	overwriteSliceWithEmptySrc := config.overwriteSliceWithEmptyValue
+	sliceDeepCopy := config.sliceDeepCopy
 	if dst.CanAddr() {
 		addr := dst.UnsafeAddr()
 		h := 17 * addr
@@ -99,7 +102,20 @@ func deepMap(dst, src reflect.Value, visited map[uintptr]*visit, depth int, conf
 				continue
 			}
 			if srcKind == dstKind {
-				if err = deepMerge(dstElement, srcElement, visited, depth+1, config); err != nil {
+				if srcKind == reflect.Slice && isEmptyValue(src) && overwriteSliceWithEmptySrc && (!sliceDeepCopy && isEmptyValue(src)) {
+					dst.Set(src)
+				} else if srcKind == reflect.Slice && sliceDeepCopy {
+					for i := 0; i < srcElement.Len() && i < dstElement.Len(); i++ {
+						srcSliceElement := srcElement.Index(i)
+						dstSliceElement := dstElement.Index(i)
+
+						if err = deepMap(dstSliceElement, srcSliceElement, visited, depth+1, config); err != nil {
+							return
+						}
+					}
+					return
+				}
+				if err = deepMap(dstElement, srcElement, visited, depth+1, config); err != nil {
 					return
 				}
 			} else if dstKind == reflect.Interface && dstElement.Kind() == reflect.Interface {
@@ -112,6 +128,43 @@ func deepMap(dst, src reflect.Value, visited map[uintptr]*visit, depth int, conf
 				}
 			} else {
 				return fmt.Errorf("type mismatch on %s field: found %v, expected %v", fieldName, srcKind, dstKind)
+			}
+		}
+	case reflect.Slice:
+		if !dst.CanSet() {
+			break
+		}
+		if (!isEmptyValue(src) || overwriteWithEmptySrc || overwriteSliceWithEmptySrc) && (overwrite || isEmptyValue(dst)) &&
+			!config.AppendSlice && (!sliceDeepCopy || isEmptyValue(src)) {
+			dst.Set(src)
+		} else if config.AppendSlice {
+			if src.Type() != dst.Type() {
+				return fmt.Errorf("cannot append two slice with different type (%s, %s)", src.Type(), dst.Type())
+			}
+			dst.Set(reflect.AppendSlice(dst, src))
+		} else if sliceDeepCopy {
+			for i := 0; i < src.Len() && i < dst.Len(); i++ {
+				srcElement := src.Index(i)
+				dstElement := dst.Index(i)
+				if srcElement.CanInterface() {
+					srcElement = reflect.ValueOf(srcElement.Interface())
+				}
+				if dstElement.CanInterface() {
+					dstElement = reflect.ValueOf(dstElement.Interface())
+				}
+
+				if err = deepMap(dstElement, srcElement, visited, depth+1, config); err != nil {
+					return
+				}
+			}
+		}
+	default:
+		mustSet := (isEmptyValue(dst) || overwrite) && (!isEmptyValue(src) || overwriteWithEmptySrc)
+		if mustSet {
+			if dst.CanSet() {
+				dst.Set(src)
+			} else {
+				dst = src
 			}
 		}
 	}
